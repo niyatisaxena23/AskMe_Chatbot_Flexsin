@@ -1,0 +1,1555 @@
+"""Ask Me -- Flexsin's site assistant. Flask + Groq-hosted Qwen3 + hybrid RAG."""
+
+import hashlib
+import json
+import logging
+import os
+import secrets
+import time
+import uuid
+from collections import deque
+
+import redis
+from dotenv import load_dotenv
+from flask import Flask, g, jsonify, render_template, request
+from flask_smorest import Api, Blueprint
+from marshmallow import Schema, fields, validate
+
+import admin
+import embeddings
+from guardrails import Anonymizer, strip_reasoning
+from llm import GroqClient, LLMError
+from prompts import build_messages
+from seed import seed
+from vectorstore import VectorStore
+
+
+load_dotenv()
+
+
+CONTACT_URL = os.getenv(
+    "CONTACT_URL",
+    "https://www.flexsin.com/contact-us/",
+)
+
+MAX_QUESTION_CHARS = 1000
+
+RATE_LIMIT_PER_MIN = int(
+    os.getenv("RATE_LIMIT_PER_MIN", "20")
+)
+
+SESSION_TTL_SECONDS = int(
+    os.getenv("SESSION_TTL_SECONDS", "3600")
+)
+
+TOP_K = int(
+    os.getenv("RETRIEVAL_TOP_K", "5")
+)
+
+REDIS_URL = os.getenv(
+    "REDIS_URL",
+    "redis://127.0.0.1:6379/0",
+)
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+
+log = logging.getLogger("askme")
+
+
+# ---------------------------------------------------------------------------
+# Public API configuration
+# ---------------------------------------------------------------------------
+
+ASKME_API_KEYS_RAW = os.getenv(
+    "ASKME_API_KEYS",
+    "",
+).strip()
+
+ASKME_API_KEY = os.getenv(
+    "ASKME_API_KEY",
+    "",
+).strip()
+
+ASKME_TENANT = os.getenv(
+    "ASKME_TENANT",
+    "default",
+).strip() or "default"
+
+
+ADMIN_ENABLED = os.getenv(
+    "ADMIN_ENABLED",
+    "1",
+) != "0"
+
+
+NO_CONTEXT_REPLY = (
+    "I don't have specific information on that — I'd recommend reaching out "
+    "to the team directly at {}.".format(CONTACT_URL)
+)
+
+
+def load_api_keys():
+    """Load public API keys from configuration."""
+
+    if ASKME_API_KEYS_RAW:
+        try:
+            parsed = json.loads(ASKME_API_KEYS_RAW)
+        except json.JSONDecodeError:
+            log.error("ASKME_API_KEYS contains invalid JSON")
+            return {}
+
+        if not isinstance(parsed, dict):
+            log.error("ASKME_API_KEYS must be a JSON object")
+            return {}
+
+        result = {}
+
+        for api_key, config in parsed.items():
+            if not isinstance(api_key, str) or not api_key:
+                continue
+
+            if not isinstance(config, dict):
+                continue
+
+            tenant = str(
+                config.get("tenant", "")
+            ).strip()
+
+            active = config.get(
+                "active",
+                True,
+            )
+
+            if not tenant:
+                log.warning(
+                    "ignoring public API key with no tenant"
+                )
+                continue
+
+            raw_origins = config.get(
+                "origins",
+                [],
+            )
+
+            if raw_origins is None:
+                raw_origins = []
+
+            if not isinstance(raw_origins, list):
+                log.warning(
+                    "ignoring origins for tenant=%s "
+                    "because origins is not a list",
+                    tenant,
+                )
+                raw_origins = []
+
+            origins = []
+
+            for origin in raw_origins:
+                if not isinstance(origin, str):
+                    continue
+
+                normalized = origin.strip().rstrip("/")
+
+                if normalized and normalized not in origins:
+                    origins.append(normalized)
+
+            raw_rate_limit = config.get(
+                "rate_limit_per_min",
+                RATE_LIMIT_PER_MIN,
+            )
+
+            try:
+                rate_limit = int(raw_rate_limit)
+            except (TypeError, ValueError):
+                rate_limit = RATE_LIMIT_PER_MIN
+
+            if rate_limit <= 0:
+                rate_limit = RATE_LIMIT_PER_MIN
+
+            result[api_key] = {
+                "tenant": tenant,
+                "active": bool(active),
+                "origins": origins,
+                "rate_limit_per_min": rate_limit,
+            }
+
+        return result
+
+    if ASKME_API_KEY:
+        return {
+            ASKME_API_KEY: {
+                "tenant": ASKME_TENANT,
+                "active": True,
+                "origins": [],
+                "rate_limit_per_min": RATE_LIMIT_PER_MIN,
+            }
+        }
+
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Flask application
+# ---------------------------------------------------------------------------
+
+app = Flask(__name__)
+
+app.config["ADMIN_ENABLED"] = ADMIN_ENABLED
+
+
+# ---------------------------------------------------------------------------
+# OpenAPI / Swagger configuration
+# ---------------------------------------------------------------------------
+
+app.config["API_TITLE"] = "Ask Me Public API"
+app.config["API_VERSION"] = "1.0.0"
+app.config["OPENAPI_VERSION"] = "3.0.3"
+
+app.config["OPENAPI_DESCRIPTION"] = (
+    "Versioned public chat API for the Flexsin Ask Me assistant."
+)
+
+app.config["OPENAPI_URL_PREFIX"] = "/"
+app.config["OPENAPI_JSON_PATH"] = "openapi.json"
+app.config["OPENAPI_SWAGGER_UI_PATH"] = "/docs"
+
+app.config["OPENAPI_SWAGGER_UI_URL"] = (
+    "https://cdn.jsdelivr.net/npm/swagger-ui-dist/"
+)
+
+
+api = Api(app)
+
+
+if ADMIN_ENABLED:
+    app.register_blueprint(admin.bp)
+
+
+store = VectorStore.load()
+
+app.extensions["askme_store"] = store
+
+
+anonymizer = Anonymizer(
+    allowed_urls=(CONTACT_URL,)
+)
+
+
+llm = GroqClient()
+
+
+# ---------------------------------------------------------------------------
+# Marshmallow schemas
+# ---------------------------------------------------------------------------
+
+
+class ChatRequestSchema(Schema):
+    message = fields.String(
+        required=True,
+        description="The user's question or message.",
+        example="What projects has Flexsin worked on?",
+    )
+
+    session_id = fields.String(
+        required=False,
+        allow_none=False,
+        description=(
+            "Optional conversation session identifier. "
+            "A new session is created when omitted."
+        ),
+        example="customer-session-123",
+    )
+
+    source_type = fields.String(
+        required=False,
+        allow_none=False,
+        validate=validate.OneOf(
+            [
+                "job",
+                "case_study",
+                "mobile_case_study",
+            ]
+        ),
+        description=(
+            "Optional source corpus filter. When supplied, retrieval "
+            "is restricted to this source type."
+        ),
+        example="case_study",
+    )
+
+
+class SourceSchema(Schema):
+    id = fields.String(
+        required=True,
+        description="Source identifier.",
+    )
+
+    title = fields.String(
+        required=True,
+        description="Source title.",
+    )
+
+    url = fields.String(
+        required=False,
+        allow_none=True,
+        description="Flexsin source page URL.",
+    )
+
+
+class ChatResponseSchema(Schema):
+    reply = fields.String(
+        required=True,
+        description="Assistant response.",
+    )
+
+    session_id = fields.String(
+        required=True,
+        description="Conversation session identifier.",
+    )
+
+    sources = fields.List(
+        fields.Nested(SourceSchema),
+        required=True,
+        description="Deduplicated source documents used for grounding.",
+    )
+
+    grounded = fields.Boolean(
+        required=True,
+        description=(
+            "Whether relevant knowledge-base context was found "
+            "for the response."
+        ),
+    )
+
+    tenant = fields.String(
+        required=True,
+        description="Tenant associated with the API key.",
+    )
+
+
+class ErrorSchema(Schema):
+    error = fields.String(
+        required=True,
+        description="Human-readable error message.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Redis
+# ---------------------------------------------------------------------------
+
+redis_client = redis.Redis.from_url(
+    REDIS_URL,
+    decode_responses=True,
+)
+
+
+def check_redis_connection():
+    """Verify that Redis is reachable."""
+
+    try:
+        redis_client.ping()
+        return True
+
+    except redis.RedisError as exc:
+        log.error(
+            "Redis connection failed: %s",
+            exc,
+        )
+        return False
+
+
+def api_key_identity(api_key):
+    """Return a non-secret identifier for an API key."""
+
+    return hashlib.sha256(
+        api_key.encode("utf-8")
+    ).hexdigest()[:24]
+
+
+def redis_session_key(tenant, session_id):
+    """Return the Redis key used for a conversation session."""
+
+    tenant_hash = hashlib.sha256(
+        tenant.encode("utf-8")
+    ).hexdigest()[:16]
+
+    return "askme:session:{}:{}".format(
+        tenant_hash,
+        session_id,
+    )
+
+
+def load_session_history(tenant, session_id):
+    """Load conversation history from Redis."""
+
+    key = redis_session_key(
+        tenant,
+        session_id,
+    )
+
+    try:
+        raw = redis_client.get(key)
+
+        if not raw:
+            return deque(maxlen=8)
+
+        parsed = json.loads(raw)
+
+        if not isinstance(parsed, list):
+            log.warning(
+                "invalid session data for tenant=%s",
+                tenant,
+            )
+            return deque(maxlen=8)
+
+        history = deque(maxlen=8)
+
+        for item in parsed:
+            if (
+                isinstance(item, list)
+                and len(item) == 2
+                and isinstance(item[0], str)
+                and isinstance(item[1], str)
+            ):
+                history.append(
+                    (
+                        item[0],
+                        item[1],
+                    )
+                )
+
+        redis_client.expire(
+            key,
+            SESSION_TTL_SECONDS,
+        )
+
+        return history
+
+    except (
+        redis.RedisError,
+        json.JSONDecodeError,
+    ) as exc:
+        log.error(
+            "Redis session read failed tenant=%s: %s",
+            tenant,
+            exc,
+        )
+        raise
+
+
+def save_session_history(tenant, session_id, history):
+    """Persist conversation history to Redis."""
+
+    key = redis_session_key(
+        tenant,
+        session_id,
+    )
+
+    payload = json.dumps(
+        list(history),
+        ensure_ascii=False,
+    )
+
+    try:
+        redis_client.setex(
+            key,
+            SESSION_TTL_SECONDS,
+            payload,
+        )
+
+    except redis.RedisError as exc:
+        log.error(
+            "Redis session write failed tenant=%s: %s",
+            tenant,
+            exc,
+        )
+        raise
+
+
+def delete_session_history(tenant, session_id):
+    """Delete one Redis conversation session."""
+
+    key = redis_session_key(
+        tenant,
+        session_id,
+    )
+
+    try:
+        redis_client.delete(key)
+
+    except redis.RedisError as exc:
+        log.error(
+            "Redis session delete failed tenant=%s: %s",
+            tenant,
+            exc,
+        )
+        raise
+
+
+def client_ip():
+    """Return the first client IP from the current request."""
+
+    value = request.headers.get(
+        "X-Forwarded-For",
+        request.remote_addr or "-",
+    )
+
+    return value.split(",")[0].strip()
+
+
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
+
+
+def normalize_origin(origin):
+    """Normalize an Origin header for comparison."""
+
+    if not origin:
+        return ""
+
+    return origin.strip().rstrip("/")
+
+
+def active_allowed_origins():
+    """Return origins registered by active API keys."""
+
+    origins = set()
+
+    for config in load_api_keys().values():
+        if not config.get("active"):
+            continue
+
+        for origin in config.get(
+            "origins",
+            [],
+        ):
+            origins.add(
+                normalize_origin(origin)
+            )
+
+    return origins
+
+
+def origin_allowed_for_config(origin, config):
+    """Check whether a specific API key permits the supplied origin."""
+
+    origin = normalize_origin(origin)
+
+    if not origin:
+        return True
+
+    allowed = {
+        normalize_origin(value)
+        for value in config.get(
+            "origins",
+            [],
+        )
+    }
+
+    return origin in allowed
+
+
+def cors_response(response, origin):
+    """Add CORS headers for an explicitly allowed origin."""
+
+    origin = normalize_origin(origin)
+
+    if not origin:
+        return response
+
+    response.headers[
+        "Access-Control-Allow-Origin"
+    ] = origin
+
+    response.headers["Vary"] = "Origin"
+
+    response.headers[
+        "Access-Control-Allow-Credentials"
+    ] = "true"
+
+    return response
+
+
+@app.before_request
+def handle_cors_preflight():
+    """Handle browser CORS preflight requests."""
+
+    if request.method != "OPTIONS":
+        return None
+
+    origin = normalize_origin(
+        request.headers.get(
+            "Origin",
+            "",
+        )
+    )
+
+    if not origin:
+        return ("", 204)
+
+    if origin not in active_allowed_origins():
+        log.warning(
+            "CORS preflight rejected origin=%s",
+            origin,
+        )
+
+        return (
+            jsonify(
+                error="Origin is not allowed."
+            ),
+            403,
+        )
+
+    requested_method = request.headers.get(
+        "Access-Control-Request-Method",
+        "",
+    ).upper()
+
+    if requested_method and requested_method not in {
+        "POST",
+        "GET",
+        "OPTIONS",
+    }:
+        return (
+            jsonify(
+                error="Requested method is not allowed."
+            ),
+            403,
+        )
+
+    requested_headers = {
+        value.strip().lower()
+        for value in request.headers.get(
+            "Access-Control-Request-Headers",
+            "",
+        ).split(",")
+        if value.strip()
+    }
+
+    allowed_headers = {
+        "content-type",
+        "x-api-key",
+    }
+
+    if not requested_headers.issubset(
+        allowed_headers
+    ):
+        return (
+            jsonify(
+                error="Requested headers are not allowed."
+            ),
+            403,
+        )
+
+    response = app.make_response(
+        ("", 204)
+    )
+
+    response.headers[
+        "Access-Control-Allow-Origin"
+    ] = origin
+
+    response.headers[
+        "Access-Control-Allow-Methods"
+    ] = "POST, GET, OPTIONS"
+
+    response.headers[
+        "Access-Control-Allow-Headers"
+    ] = "Content-Type, X-API-Key"
+
+    response.headers[
+        "Access-Control-Allow-Credentials"
+    ] = "true"
+
+    response.headers[
+        "Access-Control-Max-Age"
+    ] = "600"
+
+    response.headers["Vary"] = "Origin"
+
+    return response
+
+
+@app.after_request
+def add_cors_headers(response):
+    """Add CORS headers to actual responses."""
+
+    origin = normalize_origin(
+        request.headers.get(
+            "Origin",
+            "",
+        )
+    )
+
+    if not origin:
+        return response
+
+    if request.method == "OPTIONS":
+        return response
+
+    api_keys = load_api_keys()
+
+    supplied = request.headers.get(
+        "X-API-Key",
+        "",
+    ).strip()
+
+    config = api_keys.get(supplied)
+
+    if (
+        config
+        and config.get("active")
+        and origin_allowed_for_config(
+            origin,
+            config,
+        )
+    ):
+        return cors_response(
+            response,
+            origin,
+        )
+
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+
+def rate_limited(tenant, api_key, limit=None):
+    """Apply a Redis-backed fixed-window rate limit."""
+
+    if limit is None:
+        limit = RATE_LIMIT_PER_MIN
+
+    minute_bucket = int(
+        time.time() // 60
+    )
+
+    key = "askme:rate:{}:{}:{}:{}".format(
+        tenant,
+        api_key_identity(api_key),
+        client_ip(),
+        minute_bucket,
+    )
+
+    try:
+        count = redis_client.incr(key)
+
+        if count == 1:
+            redis_client.expire(
+                key,
+                61,
+            )
+
+        return count > limit
+
+    except redis.RedisError as exc:
+        log.error(
+            "Redis rate limiter failed tenant=%s: %s",
+            tenant,
+            exc,
+        )
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def format_context(hits):
+    """Render retrieved chunks into the context block."""
+
+    if not hits:
+        return "(no relevant context found)"
+
+    blocks = []
+
+    for hit in hits:
+        chunk = hit["chunk"]
+
+        blocks.append(
+            "[{id} | {type}] {title}\n{text}".format(
+                id=chunk["chunk_id"],
+                type=chunk.get(
+                    "source_type",
+                    "document",
+                ),
+                title=chunk.get(
+                    "source_title",
+                    "",
+                ),
+                text=chunk["text"],
+            )
+        )
+
+    return "\n\n---\n\n".join(blocks)
+
+
+def authenticate_api_key():
+    """Authenticate a public API request."""
+
+    supplied = request.headers.get(
+        "X-API-Key",
+        "",
+    ).strip()
+
+    api_keys = load_api_keys()
+
+    if not api_keys:
+        log.error(
+            "public API keys are not configured"
+        )
+
+        return (
+            None,
+            None,
+            (
+                jsonify(
+                    error="Public API is not configured."
+                ),
+                503,
+            ),
+        )
+
+    if not supplied:
+        return (
+            None,
+            None,
+            (
+                jsonify(
+                    error="Invalid or missing API key."
+                ),
+                401,
+            ),
+        )
+
+    config = api_keys.get(supplied)
+
+    if config is None:
+        return (
+            None,
+            None,
+            (
+                jsonify(
+                    error="Invalid or missing API key."
+                ),
+                401,
+            ),
+        )
+
+    if not config["active"]:
+        return (
+            None,
+            None,
+            (
+                jsonify(
+                    error="Invalid or missing API key."
+                ),
+                401,
+            ),
+        )
+
+    matched_key = None
+
+    for configured_key in api_keys:
+        if secrets.compare_digest(
+            supplied,
+            configured_key,
+        ):
+            matched_key = configured_key
+            break
+
+    if matched_key is None:
+        return (
+            None,
+            None,
+            (
+                jsonify(
+                    error="Invalid or missing API key."
+                ),
+                401,
+            ),
+        )
+
+    origin = normalize_origin(
+        request.headers.get(
+            "Origin",
+            "",
+        )
+    )
+
+    if (
+        origin
+        and not origin_allowed_for_config(
+            origin,
+            config,
+        )
+    ):
+        log.warning(
+            "CORS origin rejected tenant=%s origin=%s",
+            config["tenant"],
+            origin,
+        )
+
+        return (
+            None,
+            None,
+            (
+                jsonify(
+                    error="Origin is not allowed for this API key."
+                ),
+                403,
+            ),
+        )
+
+    return (
+        config["tenant"],
+        config,
+        None,
+    )
+
+
+def redis_error_response():
+    """Return a consistent response when Redis is unavailable."""
+
+    return (
+        jsonify(
+            error=(
+                "The service is temporarily unavailable. "
+                "Please try again shortly."
+            )
+        ),
+        503,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared public chat implementation
+# ---------------------------------------------------------------------------
+
+
+def handle_public_chat(
+    body,
+    tenant,
+    api_config,
+):
+    """Process a public API chat request."""
+
+    question = (
+        body.get("message") or ""
+    ).strip()
+
+    session_id = (
+        (body.get("session_id") or "").strip()
+        or uuid.uuid4().hex
+    )
+
+    source_type = (
+        (body.get("source_type") or "").strip()
+        or None
+    )
+
+    if not question:
+        return (
+            jsonify(
+                error="Please enter a question."
+            ),
+            400,
+        )
+
+    if len(question) > MAX_QUESTION_CHARS:
+        return (
+            jsonify(
+                error=(
+                    "That message is too long — "
+                    "try trimming it down."
+                )
+            ),
+            400,
+        )
+
+    rate_limit = api_config.get(
+        "rate_limit_per_min",
+        RATE_LIMIT_PER_MIN,
+    )
+
+    supplied_api_key = request.headers.get(
+        "X-API-Key",
+        "",
+    ).strip()
+
+    try:
+        if rate_limited(
+            tenant,
+            supplied_api_key,
+            rate_limit,
+        ):
+            response = jsonify(
+                error="Too many messages — give it a minute."
+            )
+
+            response.status_code = 429
+
+            response.headers[
+                "Retry-After"
+            ] = "60"
+
+            return response
+
+        history = load_session_history(
+            tenant,
+            session_id,
+        )
+
+    except redis.RedisError:
+        return redis_error_response()
+
+    hits = store.search(
+        question,
+        top_k=TOP_K,
+        source_type=source_type,
+    )
+
+    if not hits:
+        log.info(
+            "public API no context tenant=%s question=%s source_type=%s",
+            tenant,
+            question[:120],
+            source_type,
+        )
+
+        history.append(
+            (
+                "user",
+                question,
+            )
+        )
+
+        history.append(
+            (
+                "assistant",
+                NO_CONTEXT_REPLY,
+            )
+        )
+
+        try:
+            save_session_history(
+                tenant,
+                session_id,
+                history,
+            )
+
+        except redis.RedisError:
+            return redis_error_response()
+
+        return jsonify(
+            reply=NO_CONTEXT_REPLY,
+            session_id=session_id,
+            sources=[],
+            grounded=False,
+            tenant=tenant,
+        )
+
+    context = anonymizer.scrub(
+        format_context(hits)
+    )
+
+    messages = build_messages(
+        question,
+        context,
+        history=list(history),
+        contact_url=CONTACT_URL,
+    )
+
+    try:
+        raw = llm.complete(messages)
+
+    except LLMError as exc:
+        log.error(
+            "public API llm failure tenant=%s: %s",
+            tenant,
+            exc,
+        )
+
+        return (
+            jsonify(
+                error=(
+                    "I'm having trouble responding right now. "
+                    "Please try again, or reach the team at {}."
+                ).format(CONTACT_URL)
+            ),
+            502,
+        )
+
+    reply = anonymizer.scrub_answer(
+        strip_reasoning(raw)
+    )
+
+    if not reply:
+        reply = NO_CONTEXT_REPLY
+
+    history.append(
+        (
+            "user",
+            question,
+        )
+    )
+
+    history.append(
+        (
+            "assistant",
+            reply,
+        )
+    )
+
+    try:
+        save_session_history(
+            tenant,
+            session_id,
+            history,
+        )
+
+    except redis.RedisError:
+        return redis_error_response()
+
+    seen = []
+
+    for hit in hits:
+        entry = {
+            "id": hit["chunk"]["source_id"],
+            "title": hit["chunk"].get(
+                "source_title",
+                "",
+            ),
+            "url": hit["chunk"].get(
+                "url",
+            ),
+        }
+
+        if entry not in seen:
+            seen.append(entry)
+
+    return jsonify(
+        reply=reply,
+        session_id=session_id,
+        sources=seen,
+        grounded=True,
+        tenant=tenant,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Versioned public API blueprint
+# ---------------------------------------------------------------------------
+
+
+public_api = Blueprint(
+    "public_api",
+    __name__,
+    url_prefix="/v1",
+    description="Versioned public chat API.",
+)
+
+
+@public_api.before_request
+def authenticate_v1_request():
+    """Authenticate /v1 requests before Marshmallow validation."""
+
+    if request.method != "POST":
+        return None
+
+    tenant, api_config, auth_error = authenticate_api_key()
+
+    if auth_error is not None:
+        return auth_error
+
+    g.public_api_tenant = tenant
+    g.public_api_config = api_config
+
+    return None
+
+
+@public_api.route(
+    "/chat",
+    methods=["POST"],
+)
+@public_api.arguments(
+    ChatRequestSchema,
+    location="json",
+)
+@public_api.response(
+    200,
+    ChatResponseSchema,
+)
+@public_api.alt_response(
+    400,
+    schema=ErrorSchema,
+    description="Invalid request.",
+)
+@public_api.alt_response(
+    401,
+    schema=ErrorSchema,
+    description="Missing or invalid API key.",
+)
+@public_api.alt_response(
+    403,
+    schema=ErrorSchema,
+    description="Origin is not allowed for this API key.",
+)
+@public_api.alt_response(
+    429,
+    schema=ErrorSchema,
+    description="Rate limit exceeded.",
+)
+@public_api.alt_response(
+    502,
+    schema=ErrorSchema,
+    description="LLM provider error.",
+)
+@public_api.alt_response(
+    503,
+    schema=ErrorSchema,
+    description="Service unavailable.",
+)
+def v1_chat(body):
+    """Chat with the Ask Me assistant.
+
+    Requires X-API-Key authentication.
+    """
+
+    tenant = g.public_api_tenant
+    api_config = g.public_api_config
+
+    return handle_public_chat(
+        body,
+        tenant,
+        api_config,
+    )
+
+
+api.register_blueprint(public_api)
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+@app.get("/")
+def index():
+    return render_template(
+        "index.html",
+        contact_url=CONTACT_URL,
+    )
+
+
+@app.get("/healthz")
+def healthz():
+    redis_ok = check_redis_connection()
+
+    return jsonify(
+        status="ok" if redis_ok else "degraded",
+        chunks=len(store.chunks),
+        sources=len(store.sources),
+        model=llm.model,
+        embed_model=embeddings.MODEL_NAME,
+        llm_configured=llm.configured,
+        embeddings_ok=store.embeddings_ok,
+        admin_enabled=ADMIN_ENABLED,
+        redis_ok=redis_ok,
+    )
+
+
+@app.post("/api/chat")
+def chat():
+    body = request.get_json(
+        silent=True
+    ) or {}
+
+    question = (
+        body.get("message") or ""
+    ).strip()
+
+    session_id = (
+        (body.get("session_id") or "").strip()
+        or uuid.uuid4().hex
+    )
+
+    if not question:
+        return (
+            jsonify(
+                error="Please enter a question."
+            ),
+            400,
+        )
+
+    if len(question) > MAX_QUESTION_CHARS:
+        return (
+            jsonify(
+                error=(
+                    "That message is too long — "
+                    "try trimming it down."
+                )
+            ),
+            400,
+        )
+
+    try:
+        if rate_limited(
+            "local",
+            "local",
+            RATE_LIMIT_PER_MIN,
+        ):
+            response = jsonify(
+                error="Too many messages — give it a minute."
+            )
+
+            response.status_code = 429
+
+            response.headers[
+                "Retry-After"
+            ] = "60"
+
+            return response
+
+        history = load_session_history(
+            "local",
+            session_id,
+        )
+
+    except redis.RedisError:
+        return redis_error_response()
+
+    client_ip_value = client_ip()
+
+    log.debug(
+        "chat request ip=%s session=%s",
+        client_ip_value,
+        session_id,
+    )
+
+    hits = store.search(
+        question,
+        top_k=TOP_K,
+    )
+
+    if not hits:
+        log.info(
+            "no context for: %s",
+            question[:120],
+        )
+
+        history.append(
+            (
+                "user",
+                question,
+            )
+        )
+
+        history.append(
+            (
+                "assistant",
+                NO_CONTEXT_REPLY,
+            )
+        )
+
+        try:
+            save_session_history(
+                "local",
+                session_id,
+                history,
+            )
+
+        except redis.RedisError:
+            return redis_error_response()
+
+        return jsonify(
+            reply=NO_CONTEXT_REPLY,
+            session_id=session_id,
+            sources=[],
+            grounded=False,
+        )
+
+    context = anonymizer.scrub(
+        format_context(hits)
+    )
+
+    messages = build_messages(
+        question,
+        context,
+        history=list(history),
+        contact_url=CONTACT_URL,
+    )
+
+    try:
+        raw = llm.complete(messages)
+
+    except LLMError as exc:
+        log.error(
+            "llm failure: %s",
+            exc,
+        )
+
+        return (
+            jsonify(
+                error=(
+                    "I'm having trouble responding right now. "
+                    "Please try again, or reach the team at {}."
+                ).format(CONTACT_URL)
+            ),
+            502,
+        )
+
+    reply = anonymizer.scrub_answer(
+        strip_reasoning(raw)
+    )
+
+    if not reply:
+        reply = NO_CONTEXT_REPLY
+
+    history.append(
+        (
+            "user",
+            question,
+        )
+    )
+
+    history.append(
+        (
+            "assistant",
+            reply,
+        )
+    )
+
+    try:
+        save_session_history(
+            "local",
+            session_id,
+            history,
+        )
+
+    except redis.RedisError:
+        return redis_error_response()
+
+    seen = []
+
+    for hit in hits:
+        entry = {
+            "id": hit["chunk"]["source_id"],
+            "title": hit["chunk"].get(
+                "source_title",
+                "",
+            ),
+            "url": hit["chunk"].get(
+                "url",
+            ),
+        }
+
+        if entry not in seen:
+            seen.append(entry)
+
+    return jsonify(
+        reply=reply,
+        session_id=session_id,
+        sources=seen,
+        grounded=True,
+    )
+
+
+@app.post("/api/public/chat")
+def public_chat():
+    """Backward-compatible public API endpoint."""
+
+    tenant, api_config, auth_error = authenticate_api_key()
+
+    if auth_error is not None:
+        return auth_error
+
+    body = request.get_json(
+        silent=True
+    ) or {}
+
+    return handle_public_chat(
+        body,
+        tenant,
+        api_config,
+    )
+
+
+@app.post("/api/reset")
+def reset():
+    body = request.get_json(
+        silent=True
+    ) or {}
+
+    session_id = (
+        body.get(
+            "session_id",
+            "",
+        ) or ""
+    ).strip()
+
+    if not session_id:
+        return jsonify(ok=True)
+
+    try:
+        delete_session_history(
+            "local",
+            session_id,
+        )
+
+    except redis.RedisError:
+        return redis_error_response()
+
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+if __name__ == "__main__":
+    if not llm.configured:
+        log.warning(
+            "GROQ_API_KEY is not set — /api/chat will return 502."
+        )
+
+    if not load_api_keys():
+        log.warning(
+            "No public API keys configured — "
+            "/api/public/chat and /v1/chat will return 503."
+        )
+
+    if not check_redis_connection():
+        log.error(
+            "Redis is unavailable — "
+            "rate limiting and sessions will not work."
+        )
+
+    store.embeddings_ok = embeddings.warm_up()
+
+    if not store.chunks:
+        log.info(
+            "store is empty — seeding from data/knowledge.json"
+        )
+        seed(store)
+
+    log.info(
+        "%d chunks across %d sources",
+        len(store.chunks),
+        len(store.sources),
+    )

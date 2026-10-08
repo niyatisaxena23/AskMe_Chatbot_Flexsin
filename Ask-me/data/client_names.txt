@@ -1,0 +1,11 @@
+# One client name per line. Anything listed here is redacted out of retrieved
+# context BEFORE it reaches the model, and out of the model's answer before it
+# reaches the visitor. Lines starting with '#' are ignored.
+#
+# This is defense in depth: the knowledge base should already be anonymized.
+# Add every real client name, brand, product name and client domain here.
+#
+# Examples (replace with the real list):
+# Acme Health Systems
+# NorthPoint Logistics
+# acmehealth.com

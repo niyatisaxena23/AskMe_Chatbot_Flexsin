@@ -1,0 +1,166 @@
+{
+  "_note": "Source of truth for the Ask Me assistant. Case studies MUST be stored pre-anonymized: no client names, brands, logos, people, or client URLs. Add/edit entries here; no code change needed.",
+  "documents": [
+    {
+      "id": "svc-custom-software",
+      "type": "service",
+      "title": "Custom software development",
+      "tags": ["services", "custom software", "product engineering"],
+      "text": "Flexsin builds custom web and enterprise software end to end: requirements discovery, UX, architecture, development, QA, deployment and ongoing support. Typical work includes internal business platforms, customer portals, workflow and approval systems, reporting dashboards and API-driven integrations between existing systems. Common stacks are Node.js, Python, PHP/Laravel, .NET and Java on the backend with React, Angular or Vue on the front end, running on AWS, Azure or GCP."
+    },
+    {
+      "id": "svc-web",
+      "type": "service",
+      "title": "Web development and CMS",
+      "tags": ["services", "web", "cms", "wordpress", "drupal"],
+      "text": "Web engineering covers marketing sites, content platforms and headless CMS builds on WordPress, Drupal and Strapi, plus custom front ends in React and Next.js. Work includes performance and Core Web Vitals tuning, accessibility, multilingual content, SEO-friendly rendering (SSR/SSG) and CMS migrations from legacy platforms."
+    },
+    {
+      "id": "svc-mobile",
+      "type": "service",
+      "title": "Mobile app development",
+      "tags": ["services", "mobile", "ios", "android", "react native", "flutter"],
+      "text": "Native iOS (Swift) and Android (Kotlin) apps as well as cross-platform builds in React Native and Flutter. Scope typically spans product definition, UI/UX, offline-first data sync, push notifications, in-app payments, app store submission and post-launch release management."
+    },
+    {
+      "id": "svc-ecommerce",
+      "type": "service",
+      "title": "Ecommerce and marketplaces",
+      "tags": ["services", "ecommerce", "magento", "shopify", "marketplace"],
+      "text": "Ecommerce builds and replatforming on Magento/Adobe Commerce, Shopify and Shopify Plus, WooCommerce and custom headless storefronts. Frequent scope: multi-vendor marketplaces, B2B pricing and quoting, PIM and ERP integration, payment gateway and tax integration, subscription commerce and checkout conversion optimisation."
+    },
+    {
+      "id": "svc-ai",
+      "type": "service",
+      "title": "AI, data and automation",
+      "tags": ["services", "ai", "machine learning", "llm", "rag", "automation", "data"],
+      "text": "AI engagements include LLM-based assistants and RAG systems over private document sets, document extraction and classification, recommendation and forecasting models, and workflow automation. Delivery covers data pipelines, vector search, evaluation harnesses and guardrails, plus the surrounding application. Typical tooling: Python, LangChain-style orchestration, vector databases, and managed model APIs."
+    },
+    {
+      "id": "svc-blockchain",
+      "type": "service",
+      "title": "Blockchain and Web3",
+      "tags": ["services", "blockchain", "web3", "smart contracts", "solidity"],
+      "text": "Smart contract development and audit support on Ethereum and EVM-compatible chains, token and wallet integrations, NFT platforms, and permissioned/enterprise ledgers on Hyperledger. Work usually pairs on-chain contracts in Solidity with conventional web back ends and indexing layers."
+    },
+    {
+      "id": "svc-cloud-devops",
+      "type": "service",
+      "title": "Cloud and DevOps",
+      "tags": ["services", "cloud", "devops", "aws", "azure", "kubernetes", "ci/cd"],
+      "text": "Cloud migration and modernisation on AWS, Azure and GCP; containerisation with Docker and Kubernetes; infrastructure as code with Terraform; CI/CD pipelines; observability and cost optimisation. Also includes monolith-to-microservices decomposition and reliability work such as autoscaling, blue-green releases and disaster recovery planning."
+    },
+    {
+      "id": "svc-qa",
+      "type": "service",
+      "title": "QA and test automation",
+      "tags": ["services", "qa", "testing", "automation", "security testing"],
+      "text": "Manual and automated QA: functional, regression, performance and load testing, API testing, cross-browser and device coverage, and accessibility checks. Automation frameworks typically use Selenium, Cypress, Playwright and Appium, wired into CI so regression suites run on every build."
+    },
+    {
+      "id": "svc-design",
+      "type": "service",
+      "title": "UI/UX design",
+      "tags": ["services", "design", "ux", "ui", "research"],
+      "text": "Product and experience design: user research, information architecture, wireframes, interactive prototypes, visual design and design systems. Design usually runs a sprint or two ahead of engineering so screens are validated before build."
+    },
+    {
+      "id": "svc-support",
+      "type": "service",
+      "title": "Maintenance and managed support",
+      "tags": ["services", "support", "maintenance", "sla", "managed services"],
+      "text": "Post-launch support runs on retainer or dedicated-team models: bug fixes, security patching, dependency upgrades, uptime monitoring, incident response against agreed SLAs, and a steady backlog of small enhancements. Many clients move from a fixed-scope build into ongoing support with the same core engineers."
+    },
+    {
+      "id": "proc-engagement",
+      "type": "process",
+      "title": "How an engagement works",
+      "tags": ["process", "discovery", "estimation", "delivery", "support"],
+      "text": "A typical engagement runs in four stages. Discovery: requirement workshops, current-state review and a solution outline. Estimation: scope broken into modules with effort ranges, a proposed team shape and a delivery timeline. Delivery: two-week agile sprints with a dedicated team, sprint demos, a shared backlog and QA running alongside development. Support: warranty period after go-live, then an optional maintenance retainer. Communication is usually a named project manager plus direct access to the engineering team over your preferred channel."
+    },
+    {
+      "id": "proc-engagement-models",
+      "type": "process",
+      "title": "Engagement and pricing models",
+      "tags": ["process", "pricing", "models", "dedicated team", "fixed price"],
+      "text": "Three common commercial models: fixed price for well-defined scope, time and materials for evolving scope, and a dedicated team (staff augmentation) where engineers work as an extension of your in-house team on a monthly basis. Actual rates, timelines and contract terms are quoted per project by the sales team rather than published."
+    },
+    {
+      "id": "proc-team",
+      "type": "process",
+      "title": "Team and delivery model",
+      "tags": ["process", "team", "delivery", "offshore"],
+      "text": "Flexsin is a full-service technology company with in-house design, engineering, QA and DevOps rather than a broker of contractors. Teams are cross-functional and assigned per project, and typically include a project manager, tech lead, developers, a QA engineer and a designer. Delivery is distributed with overlap hours arranged around the client's time zone."
+    },
+    {
+      "id": "proc-industries",
+      "type": "company",
+      "title": "Industries served",
+      "tags": ["industries", "domains", "verticals"],
+      "text": "Work spans healthcare and life sciences, financial services and fintech, retail and ecommerce, logistics and supply chain, education and e-learning, real estate, travel and hospitality, media and entertainment, manufacturing, and public sector. Regulated-industry projects routinely involve requirements such as HIPAA, GDPR, PCI-DSS and SOC 2 controls."
+    },
+    {
+      "id": "proc-security",
+      "type": "company",
+      "title": "Security and compliance practices",
+      "tags": ["security", "compliance", "hipaa", "gdpr", "nda"],
+      "text": "Standard practice includes NDAs before discovery, client-owned IP on delivery, code hosted in the client's repositories where preferred, role-based access, secrets management, dependency and vulnerability scanning in CI, and penetration testing for projects that need it. Compliance work is scoped per project against the applicable framework."
+    },
+    {
+      "id": "cs-healthcare-portal",
+      "type": "case_study",
+      "title": "Patient engagement portal for a healthcare provider network",
+      "tags": ["case study", "healthcare", "hipaa", "portal", "react", "node"],
+      "text": "A multi-location healthcare provider network needed to replace phone-based scheduling and paper intake. Flexsin delivered a HIPAA-aligned patient portal with online appointment booking, digital intake forms, secure messaging with care teams and lab result delivery, integrated with the existing EHR over HL7/FHIR. Stack: React front end, Node.js services, PostgreSQL, AWS with encrypted storage and audit logging. Outcome: the majority of appointment bookings moved to self-service, call volume at the front desk dropped sharply, and intake paperwork time per patient fell from roughly fifteen minutes to under five."
+    },
+    {
+      "id": "cs-fintech-onboarding",
+      "type": "case_study",
+      "title": "KYC and onboarding automation for a fintech lender",
+      "tags": ["case study", "fintech", "kyc", "automation", "python", "aws"],
+      "text": "A consumer lending fintech was manually reviewing identity documents and income proofs, creating a multi-day onboarding delay. Flexsin built an automated onboarding pipeline: document upload and OCR extraction, third-party KYC/AML checks, a rules engine for auto-approval thresholds and an internal review console for edge cases. Stack: Python services, AWS Textract and Lambda, PostgreSQL, React admin console. Outcome: median time-to-decision went from days to minutes, with roughly three quarters of applications clearing without human review."
+    },
+    {
+      "id": "cs-b2b-marketplace",
+      "type": "case_study",
+      "title": "B2B multi-vendor marketplace replatforming",
+      "tags": ["case study", "ecommerce", "marketplace", "magento", "b2b", "erp"],
+      "text": "A wholesale distributor running on an ageing custom cart needed multi-vendor support and contract pricing. Flexsin replatformed the storefront onto Adobe Commerce with a custom vendor onboarding and payout module, customer-specific price lists, quote-to-order workflow and a two-way ERP integration for inventory and invoicing. Stack: Adobe Commerce, PHP, MySQL, Elasticsearch, REST integration layer. Outcome: hundreds of third-party sellers onboarded in the first year and a substantial lift in average order value from B2B quoting."
+    },
+    {
+      "id": "cs-logistics-tracking",
+      "type": "case_study",
+      "title": "Fleet and shipment visibility platform for a logistics operator",
+      "tags": ["case study", "logistics", "iot", "real time", "mobile", "kubernetes"],
+      "text": "A regional logistics operator had no live visibility into fleet position or delivery status. Flexsin delivered a tracking platform ingesting GPS and telematics events, with live dispatcher dashboards, route deviation and ETA alerts, a proof-of-delivery driver app and a customer-facing tracking page. Stack: Node.js event ingestion, Kafka, MongoDB time-series storage, React dashboards, React Native driver app, Kubernetes on AWS. Outcome: on-time delivery performance improved materially and customer support calls asking 'where is my shipment' fell by well over half."
+    },
+    {
+      "id": "cs-elearning",
+      "type": "case_study",
+      "title": "Learning platform for an education provider",
+      "tags": ["case study", "education", "e-learning", "lms", "video", "scale"],
+      "text": "An education provider outgrew an off-the-shelf LMS and needed cohort-based courses with live and recorded sessions. Flexsin built a custom learning platform with course authoring, adaptive learning paths, video delivery and DRM, proctored assessments, certification and an instructor analytics dashboard. Stack: Laravel back end, Vue front end, MySQL, AWS with CloudFront delivery and elastic transcoding. Outcome: the platform scaled to tens of thousands of concurrent learners during peak enrolment without the stability problems of the previous system."
+    },
+    {
+      "id": "cs-ai-support-assistant",
+      "type": "case_study",
+      "title": "RAG support assistant for a mid-size SaaS platform",
+      "tags": ["case study", "ai", "llm", "rag", "saas", "support", "python"],
+      "text": "A mid-size B2B SaaS company was seeing support tickets grow faster than headcount. Flexsin built a retrieval-augmented assistant over their product documentation, changelog and resolved-ticket history, embedded in the product and in their help centre, with citation of source articles, confidence-based escalation to a human agent and an evaluation suite to catch regressions on each content update. Stack: Python, vector database, managed LLM API, and a feedback loop that flags low-confidence answers for content gaps. Outcome: around a third of incoming tickets were deflected in the first quarter and first-response time dropped for the rest."
+    },
+    {
+      "id": "cs-realestate-crm",
+      "type": "case_study",
+      "title": "Property CRM and listings platform for a real estate group",
+      "tags": ["case study", "real estate", "crm", "integration", "portal"],
+      "text": "A real estate group was running listings, leads and agent commissions across spreadsheets and three disconnected tools. Flexsin consolidated them into a single platform: MLS/listing feed ingestion, a lead capture and routing engine, agent CRM with pipeline stages, document e-signature and a commission calculation module. Stack: .NET Core services, React, SQL Server, Azure. Outcome: lead response time dropped from hours to minutes and commission reconciliation moved from a manual monthly exercise to an automated report."
+    },
+    {
+      "id": "cs-manufacturing-iot",
+      "type": "case_study",
+      "title": "Production monitoring for a manufacturer",
+      "tags": ["case study", "manufacturing", "iot", "dashboard", "predictive"],
+      "text": "A manufacturer wanted plant-floor data out of isolated machine controllers and into one view. Flexsin built an IIoT monitoring layer that collects machine telemetry via OPC-UA and MQTT, computes OEE in real time, surfaces downtime reasons on shop-floor dashboards and runs a predictive maintenance model on vibration and temperature trends. Stack: Python ingestion services, TimescaleDB, Grafana-style custom dashboards, Azure IoT Hub. Outcome: unplanned downtime reduced noticeably in the first six months and maintenance moved from calendar-based to condition-based."
+    }
+  ]
+}

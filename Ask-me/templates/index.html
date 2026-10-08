@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask Me — Flexsin</title>
+<link rel="stylesheet" href="/static/widget.css">
+</head>
+<body>
+<main class="page">
+  <header class="page-head">
+    <h1>Ask Me</h1>
+    <p>Flexsin's assistant — services, process, and the kind of work we've delivered.</p>
+  </header>
+
+  <section class="chat" id="chat" aria-live="polite">
+    <div class="msg bot">
+      <p>Hi — I'm Ask Me, Flexsin's assistant. I can walk you through our services, how an engagement runs, or the kinds of projects we've delivered. What are you looking into?</p>
+    </div>
+  </section>
+
+  <div class="chips" id="chips">
+    <button type="button">What services do you offer?</button>
+    <button type="button">How does an engagement work?</button>
+    <button type="button">Any healthcare projects?</button>
+    <button type="button">Do you do AI work?</button>
+  </div>
+
+  <form class="composer" id="composer">
+    <input id="input" type="text" maxlength="1000" autocomplete="off"
+           placeholder="Ask about services, process, or past work…" aria-label="Your question">
+    <button type="submit" id="send">Send</button>
+  </form>
+
+  <footer class="page-foot">
+    Need pricing, timelines or contracts? <a href="{{ contact_url }}">Talk to the team</a>.
+  </footer>
+</main>
+<script src="/static/widget.js"></script>
+</body>
+</html>

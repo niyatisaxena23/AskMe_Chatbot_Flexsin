@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask Me — Knowledge admin</title>
+<link rel="stylesheet" href="/static/widget.css">
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+
+<div class="gate" id="gate">
+  <form class="gate-box" id="gate-form">
+    <h1>Knowledge admin</h1>
+    <p class="muted">Enter the admin token. If <code>ADMIN_TOKEN</code> isn't set in
+       <code>.env</code>, a random one is printed in the server log at startup.</p>
+    <input type="password" id="token" placeholder="Admin token" autocomplete="off">
+    <button type="submit">Unlock</button>
+    <p class="err" id="gate-err"></p>
+  </form>
+</div>
+
+<main class="admin" id="admin" hidden>
+  <header class="admin-head">
+    <div>
+      <h1>Knowledge admin</h1>
+      <p class="muted" id="stats">—</p>
+    </div>
+    <a class="ghost" href="/">Open chat →</a>
+  </header>
+
+  <div class="cols">
+    <section class="card">
+      <h2>Add content</h2>
+
+      <div class="tabs" id="tabs">
+        <button type="button" class="on" data-tab="paste">Paste text</button>
+        <button type="button" data-tab="file">Upload file</button>
+      </div>
+
+      <form id="ingest-form">
+        <label>Title
+          <input type="text" id="title" placeholder="e.g. Salesforce capabilities">
+        </label>
+
+        <label>Type
+          <select id="type">
+            <option value="service">service</option>
+            <option value="process">process</option>
+            <option value="company">company</option>
+            <option value="case_study">case_study</option>
+            <option value="document" selected>document</option>
+          </select>
+        </label>
+
+        <div class="pane" data-pane="paste">
+          <label>Text
+            <textarea id="text" rows="12" placeholder="Paste the content here…"></textarea>
+          </label>
+        </div>
+
+        <div class="pane" data-pane="file" hidden>
+          <label>File
+            <input type="file" id="file" accept=".txt,.md,.docx,.pdf">
+          </label>
+          <p class="muted small">Supported: {{ extensions }} · max 8MB.
+             Title defaults to the filename.</p>
+        </div>
+
+        <button type="submit" id="ingest-btn">Embed &amp; add</button>
+        <p class="note" id="ingest-note"></p>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Test retrieval</h2>
+      <p class="muted small">Run a visitor question and see the exact chunks that
+         would be sent to the model. Nothing here calls the LLM.</p>
+      <form id="search-form">
+        <input type="text" id="query" placeholder="e.g. do you do HIPAA work?">
+        <button type="submit">Search</button>
+      </form>
+      <div id="results"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Indexed sources</h2>
+    <div id="sources"></div>
+  </section>
+</main>
+
+<script src="/static/admin.js"></script>
+</body>
+</html>
