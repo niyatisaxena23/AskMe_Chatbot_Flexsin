@@ -26,10 +26,8 @@
     return wrap;
   }
 
-  // Minimal renderer: paragraphs, "-"/"*" bullets, and bare URLs.
-  // Deliberately builds DOM nodes rather than setting innerHTML.
   function render(container, text) {
-    var lines = String(text).split('\n');
+    var lines = String(text || '').split('\n');
     var list = null;
 
     lines.forEach(function (line) {
@@ -70,28 +68,26 @@
     while ((match = pattern.exec(text)) !== null) {
       if (match.index > cursor) {
         node.appendChild(
-          document.createTextNode(
-            text.slice(cursor, match.index)
-          )
+          document.createTextNode(text.slice(cursor, match.index))
         );
       }
 
-      var url = match[0].replace(/[.,;:]$/, '');
+      var rawUrl = match[0];
+      var url = rawUrl.replace(/[.,;:!?]+$/, '');
 
-      var a = el('a', null, url);
-      a.href = url;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-
-      node.appendChild(a);
+      if (url) {
+        var a = el('a', null, url);
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        node.appendChild(a);
+      }
 
       cursor = match.index + url.length;
     }
 
     node.appendChild(
-      document.createTextNode(
-        text.slice(cursor)
-      )
+      document.createTextNode(text.slice(cursor))
     );
   }
 
@@ -113,226 +109,81 @@
     send.disabled = state;
     input.disabled = state;
 
-    if (!state) {
-      input.focus();
-    }
-  }
-
-  function addStreamingMessage() {
-    var wrap = el('div', 'msg bot');
-
-    var content = el('div', 'stream-content');
-    wrap.appendChild(content);
-
-    chat.appendChild(wrap);
-    scroll();
-
-    return {
-      wrap: wrap,
-      content: content,
-      text: ''
-    };
-  }
-
-  function renderStreamingText(state) {
-    /*
-     * Re-render the complete sanitized text.
-     *
-     * This deliberately uses the existing safe DOM renderer rather than
-     * innerHTML, so streamed content cannot become executable HTML.
-     */
-    state.content.textContent = '';
-    render(state.content, state.text);
-    scroll();
-  }
-
-  function parseSSEBlock(block) {
-    var eventName = 'message';
-    var dataLines = [];
-
-    block.split('\n').forEach(function (line) {
-      if (line.indexOf('event:') === 0) {
-        eventName = line.slice(6).trim();
-      } else if (line.indexOf('data:') === 0) {
-        dataLines.push(line.slice(5).trim());
-      }
-    });
-
-    if (!dataLines.length) {
-      return null;
-    }
-
-    var data;
-
-    try {
-      data = JSON.parse(dataLines.join('\n'));
-    } catch (error) {
-      return null;
-    }
-
-    return {
-      event: eventName,
-      data: data
-    };
-  }
-
-  function processSSEBuffer(buffer, state) {
-    var parts = buffer.split('\n\n');
-
-    /*
-     * The final element may be incomplete.
-     * Keep it for the next network chunk.
-     */
-    var remainder = parts.pop();
-
-    parts.forEach(function (part) {
-      var event = parseSSEBlock(part);
-
-      if (!event) {
-        return;
-      }
-
-      if (event.event === 'meta') {
-        if (event.data.session_id) {
-          sessionId = event.data.session_id;
-        }
-
-        return;
-      }
-
-      if (event.event === 'token') {
-        var text = event.data.text || '';
-
-        state.text += text;
-        renderStreamingText(state);
-
-        return;
-      }
-
-      if (event.event === 'done') {
-        if (event.data.session_id) {
-          sessionId = event.data.session_id;
-        }
-
-        return;
-      }
-
-      if (event.event === 'error') {
-        state.error = event.data.error || 'Something went wrong.';
-      }
-    });
-
-    return remainder;
+    if (!state) input.focus();
   }
 
   function ask(question) {
-    if (busy || !question) {
-      return;
-    }
+    if (busy || !question) return;
 
     addMessage('user', question);
-
     input.value = '';
     setBusy(true);
 
     var typing = addTyping();
 
-    fetch('/api/chat/stream', {
+    fetch('/api/chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'text/event-stream'
+        'Accept': 'application/json'
       },
       body: JSON.stringify({
         message: question,
         session_id: sessionId
       })
     })
-      .then(function (res) {
-        if (!res.ok) {
-          return res.json()
-            .catch(function () {
-              return {};
-            })
-            .then(function (body) {
-              throw new Error(
-                body.error ||
-                'Something went wrong. Please try again.'
-              );
-            });
-        }
+      .then(function (response) {
+        return response.text().then(function (text) {
+          var body;
 
-        if (!res.body) {
-          throw new Error(
-            'Streaming is not supported by this browser.'
-          );
-        }
+          try {
+            body = text ? JSON.parse(text) : {};
+          } catch (error) {
+            throw new Error(
+              'The server returned an invalid response. Check the Flask terminal.'
+            );
+          }
 
+          if (!response.ok) {
+            throw new Error(
+              body.error || 'Request failed with status ' + response.status + '.'
+            );
+          }
+
+          return body;
+        });
+      })
+      .then(function (body) {
         typing.remove();
 
-        var state = addStreamingMessage();
-        var reader = res.body.getReader();
-        var decoder = new TextDecoder('utf-8');
-        var buffer = '';
-
-        function readNext() {
-          return reader.read().then(function (result) {
-            if (result.done) {
-              /*
-               * Process a final complete event if one is left.
-               */
-              if (buffer.trim()) {
-                processSSEBuffer(buffer, state);
-              }
-
-              if (state.error) {
-                state.wrap.remove();
-                addMessage('error', state.error);
-              }
-
-              return;
-            }
-
-            buffer += decoder.decode(
-              result.value,
-              { stream: true }
-            );
-
-            buffer = processSSEBuffer(
-              buffer,
-              state
-            );
-
-            if (state.error) {
-              throw new Error(state.error);
-            }
-
-            return readNext();
-          });
+        if (body.error) {
+          addMessage('error', body.error);
+          return;
         }
 
-        return readNext();
+        if (body.session_id) {
+          sessionId = body.session_id;
+        }
+
+        if (typeof body.reply !== 'string' || !body.reply.trim()) {
+          addMessage(
+            'error',
+            'The server returned no answer. Please try again.'
+          );
+          return;
+        }
+
+        addMessage('bot', body.reply);
       })
       .catch(function (error) {
         typing.remove();
 
-        var existingStreaming =
-          chat.querySelector(
-            '.msg.bot .stream-content'
-          );
-
-        if (
-          existingStreaming &&
-          existingStreaming.textContent
-        ) {
-          return;
-        }
-
         addMessage(
           'error',
-          error.message ||
-          'Connection problem — please try again.'
+          error.message || 'Connection problem — please try again.'
         );
+
+        console.error('Ask Me request failed:', error);
       })
       .finally(function () {
         setBusy(false);
@@ -346,7 +197,7 @@
 
   chips.addEventListener('click', function (event) {
     if (event.target.tagName === 'BUTTON') {
-      ask(event.target.textContent);
+      ask(event.target.textContent.trim());
     }
   });
 
